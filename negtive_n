@@ -1,0 +1,246 @@
+!
+!   average_n为0.f90
+!   tmm2
+!
+!   Created by abc on 2019/2/27.
+!   Copyright 2019 abc. All rights reserved.
+!
+!
+implicit real*8 (a-h,o-z)
+!cc
+!cc FUNCTION: to caclculate the transmittance of a multilayer
+!cc      IN:  n --- number of layers to be calculated
+!cc          n1 --- position to input incident wave
+!cc          n2 --- position to measure extract transmitted wave
+!cc          [f1,f2] --- frequency interval for study
+!cc          nf   --- number of frequencies
+!cc
+parameter (NLAYER=100,c=299.8d0)
+dimension dlayer(nlayer)
+real*8 epsilon(nlayer),fmu(nlayer)
+complex*16 transfer(2,2),p(2,2),Q(2,2),s11,s21!why是*16？等价于双精度复型DOUBLE COMPLEX
+
+integer n,n1,n2,nf,i,j,k
+!cc
+pi = 4.d0* datan(1.d0)
+!cc
+!open(11,file='model-e.dat',status="replace")
+open(11,file='/Users/abc/subject/腾飞科创/fortran/average_n为0/model-e.dat',status="replace")
+!只能用绝对路径（full path）来创建文件，路径名在xcode的右上角有
+n=33
+n1=1
+n2=33
+nf=500
+eps1=1.d0 !?
+epb1=5.d0!?
+epb2=10.d0!?
+f01=0.9d0
+f02=11.5d0
+fmu1=1.d0
+fmc1=3.d0!?
+fc01=0.902d0!?
+
+dlayer(1)=16.d0   !空气厚度
+!各介质层的宽度，是奇偶交替的
+do 1   i = 1, 8,1
+j =2*i
+dlayer(j)=4.d0
+k =2*i+1
+dlayer(k)=16.d0
+1    continue
+
+!cc
+f1=1.d0
+f2=11.d0
+nf=500
+fstep = (f2-f1)/nf
+!cc 从f1递增到f2
+do 5 iw = 0, nf, 1
+!print*,'iw=',iw
+f = f1 + fstep * iw
+omega = f * 2.d0 * pi
+!cc
+Q(1,1) = 1.d0
+Q(2,2) = 1.d0
+Q(1,2) = 0.d0
+Q(2,1) = 0.d0
+do 2 i = 1, 16,1
+j =2*i !介质层（非空气）
+epsilon(j) =-8.d0
+fmu(j)     =-2.d0
+k =2*i+1  !因为n==33，最多有2*16+1==33层，air是在k（奇数）层
+epsilon(k)=1.d0
+fmu(k)=1.d0
+2     continue
+epsilon(1)=1.d0
+fmu(1)=1.d0
+
+!cc
+!cc
+do 10 l = n1, n2-1,1
+call transmtx(omega,epsilon,fmu,l,transfer)
+eps  = dabs(epsilon(l+1) * fmu(l+1))
+eps  = dsqrt(eps)    !eps是折射率；根据下面的prop部分，eps也可能是复数，但是体现在哪呢？
+dd0  = dlayer(l+1) !dd0应是介质的宽度
+call prop(fmu,omega,eps,l,dd0,p)
+call dotmatx(2,transfer,Q) !Q是一个求积的中间变量
+call dotmatx(2,p,Q)
+
+10      continue
+!cc
+!cc
+s11 = - Q(2,1) / Q(2,2)
+s21 = Q(1,1) - Q(1,2) * Q(2,1) / Q(2,2)
+!cc
+call randphi(s21,t,t_p)
+call randphi(s11,r,r_p)
+t_p = t_p * 180.d0 / pi
+r_p = r_p * 180.d0 / pi!代表相位
+!cc
+call shift(t_p,-180.d0,180.d0)
+call shift(r_p,-180.d0,180.d0)
+!cc
+write(11,'(2x,7e15.7)') f,r,t,r_p,t_p
+!2x是什么意思？
+!7代表列数，因为此处只有5个变量，所以在此处换成5 or 6 or 7 效果均相同
+!e代表实型,因为此处5个变量都是实型，所以不用在格式化输出的时候一一列举他们的格式
+!15代表字符宽度w
+!.7表示小数的位数
+
+
+5     continue
+!cc
+close(11)
+end
+!cc ----------------------------------------------------------
+subroutine shift(phase,begin,end)
+implicit real*8 (a-h,o-z)
+!cc
+!cc FUNCTION: shift an arbitrary phase to region [begin,end]
+!cc
+pinterval = end - begin
+if(dabs(pinterval - 360.d0) .gt. 1.d-5) stop'shift:interval wrong'
+!cc
+if(phase .gt. end) then
+10              if(phase .gt. end) then
+phase = phase - pinterval
+goto 10
+endif
+else
+20              if(phase .lt. begin) then
+phase = phase + pinterval
+goto 20
+endif
+endif
+!cc
+end1   = end + 1.d-2
+begin1 = begin - 1.d-2
+if(phase .gt. end1) stop'shift: still not consistent'
+if(phase .lt. begin1) stop'shift: still not consistent'
+!cc
+return
+end
+!cc ----------------------------------------------------------
+
+subroutine transmtx(omega,epsilon,fmu,l,transfer)
+implicit real*8 (a-h,o-z)
+!cc
+!cc   FUNCTION: to calculate the transfer matrix M_{l+1,l}
+!cc
+!cc   After   Photonic Band-Gap materials, pp. 468.
+!cc
+!cc
+parameter (NLAYER=100)
+parameter (c = 299.8d0)
+real*8 epsilon(nlayer),fmu(nlayer)
+real*8 ckl1,ckl2,eps
+complex*16 transfer(2,2)
+
+!cc
+if(l .lt. 0) stop'transmtx: l less than 1'
+!cc
+eps  = epsilon(l+1) * fmu(l+1)
+ckl1= dsqrt(dabs(eps))
+eps  = epsilon(l) * fmu(l)
+ckl2= dsqrt(dabs(eps))
+ckl1 = -ckl1 / fmu(l+1)
+ckl2 = -ckl2 / fmu(l)
+!cc
+transfer(1,1) = 0.5d0 * (1.d0 + ckl2/ckl1)
+transfer(1,2) = 0.5d0 * (1.d0 - ckl2/ckl1)
+transfer(2,1) = 0.5d0 * (1.d0 - ckl2/ckl1)
+transfer(2,2) = 0.5d0 * (1.d0 + ckl2/ckl1)
+!cc
+return
+end
+!cc
+!cc ****************************************************************
+!cc
+subroutine prop(fmu,omega,eps,l,dd0,p)
+implicit real*8 (a-h,o-z)
+!cc
+!cc   FUNCTION: to calculate the propergation matrix P(d0)
+!cc   After   Photonic Band-Gap materials, pp. 468.
+!cc
+!cc
+parameter (NLAYER=100)
+parameter (c = 299.8d0) !c的数量级应该不止这个？
+complex*16 p(2,2),ckl
+real*8 fmu(nlayer),eps
+!cc
+
+ckl = eps* omega / c !omega / c 即wavenumber k0; eps是折射率
+ckl = ckl * dd0
+fkkr = dreal(ckl)         !fkkr~real; fkki~image
+fkki = dimag(ckl)
+p(1,1) = dexp(-fkki) * dcmplx(dcos(fkkr),dsin(fkkr)) !传播矩阵有实数and复数，即可以是允带，也可以是禁带
+p(2,2) = dexp(fkki) * dcmplx(dcos(fkkr),-dsin(fkkr))
+p(1,2) = dcmplx(0.d0,0.d0)
+p(2,1) = dcmplx(0.d0,0.d0)
+!cc
+return
+end
+!cc
+!cc **************************************************************
+
+subroutine dotmatx(ndim,a,b)
+!cc
+!cc FUNCTION: to calculate the dot product of two complex matrix a & b
+!cc           finally input back to matrix b
+!cc
+implicit real*8(a-h,o-z)
+complex*16 a(ndim,ndim),b(ndim,ndim),c(2,2)
+!cc
+do 10 i = 1, ndim
+do 10 j = 1, ndim
+c(i,j) = dcmplx(0.d0,0.d0)
+do 20 k = 1, ndim
+c(i,j) = c(i,j) + a(i,k) * b(k,j)
+20         continue
+10      continue
+!cc
+do 30 i = 1, ndim
+do 30 j = 1, ndim
+b(i,j) = c(i,j)
+30      continue
+!cc
+return
+end
+!cc ------------------------------------------------------------------
+!cc
+subroutine randphi(s,r,phi) !半径r和相位phi
+!cc
+!cc FUNCTION: input a complex number s, output r & phi
+!cc
+implicit real*8 (a-h,o-z)
+complex*16 s
+!cc
+pi   = 4.d0 * datan(1.d0)
+r    = dsqrt(dreal(s)**2 + dimag(s)**2)
+phi  = datan(dimag(s) / dreal(s))
+if(dabs(dimag(s)-r*dsin(phi)) .gt. 1.d-6) phi = pi + phi
+if(dabs(dreal(s)-r*dcos(phi)) .gt. 1.d-6) phi = pi + phi
+return
+end
+!cc
+
